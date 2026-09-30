@@ -1,0 +1,26 @@
+[project]
+name = "blog-writing-agent"
+version = "0.1.0"
+requires-python = ">=3.14"
+dependencies = [
+    "faiss-cpu",
+    "fonttools>=4.66.0",
+    "ipykernel",
+    "langchain",
+    "langchain-classic",
+    "langchain-community",
+    "langchain-core",
+    "langchain-google-genai",
+    "langchain-groq",
+    "langchain-huggingface",
+    "langchain-openai",
+    "langchain-tavily>=0.2.18",
+    "langchain-text-splitters",
+    "langchainhub",
+    "langgraph",
+    "langgraph-checkpoint-postgres",
+    "pypdf",
+    "python-dotenv",
+    "streamlit",
+    "tavily-python>=0.8.1",
+]
