@@ -1,139 +1,183 @@
 # Corrective RAG (CRAG) Tutorial
 
-A comprehensive, step-by-step implementation of **Corrective Retrieval-Augmented Generation (CRAG)** using **LangGraph**, **LangChain**, **FAISS Vector Store**, **Google Generative AI Embeddings**, and **Groq LLMs**.
+A comprehensive, production-oriented implementation of **Corrective Retrieval-Augmented Generation (CRAG)** built with **LangGraph**, **LangChain**, **FAISS Vector Database**, **Google Generative AI Embeddings**, and **Groq LLMs**.
 
 ---
 
-## 📖 Overview & Progression
-
-This repository illustrates the step-by-step evolution of a RAG pipeline from a basic naive architecture to an advanced, production-grade Corrective RAG system:
-
-| Notebook | Topic | Key Concepts |
-| :--- | :--- | :--- |
-| [`1_basic_rag.ipynb`](./1_basic_rag.ipynb) | **Naive RAG** | Baseline pipeline: Document loading, chunking, vector indexing, similarity search, and direct generation. |
-| [`2_retrieval_refinement.ipynb`](./2_retrieval_refinement.ipynb) | **Retrieval Refinement** | Sentence-level decomposition, relevance filtering using an LLM judge (`KeepOrDrop`), and context recomposition to strip noise. |
-| [`3_retrieval_evaluator.ipynb`](./3_retrieval_evaluator.ipynb) | **Corrective RAG (CRAG)** | Document confidence evaluator scoring, verdict classification (`CORRECT`, `AMBIGUOUS`, `INCORRECT`), conditional routing, refinement of high-confidence docs, and fallback handling. |
+## 📑 Table of Contents
+- [Architecture & Workflow](#-architecture--workflow)
+- [Step-by-Step Pipeline Walkthrough](#-step-by-step-pipeline-walkthrough)
+  - [Part 1: Naive RAG (`1_basic_rag.ipynb`)](#part-1-naive-rag-1_basic_ragipynb)
+  - [Part 2: Retrieval Refinement (`2_retrieval_refinement.ipynb`)](#part-2-retrieval-refinement-2_retrieval_refinementipynb)
+  - [Part 3: Corrective Evaluator (`3_retrieval_evaluator.ipynb`)](#part-3-corrective-evaluator-3_retrieval_evaluatoripynb)
+- [State Management](#-state-management)
+- [Quick Start Guide](#-quick-start-guide)
+- [Tech Stack](#-tech-stack)
 
 ---
 
-## 🏗️ Architecture & Workflow (Notebook 3)
+## 🏗️ Architecture & Workflow
 
-The graph below represents the execution flow and decision logic implemented in [`3_retrieval_evaluator.ipynb`](./3_retrieval_evaluator.ipynb):
+### Full Corrective RAG Flow (`3_retrieval_evaluator.ipynb`)
 
 ```mermaid
 flowchart TD
-    %% Styling
-    classDef startEnd fill:#f8f9fa,stroke:#333,stroke-width:2px,color:#111;
-    classDef processNode fill:#e1f5fe,stroke:#0288d1,stroke-width:2px,color:#01579b;
-    classDef decisionNode fill:#fff9c4,stroke:#fbc02d,stroke-width:2px,color:#f57f17;
-    classDef branchGreen fill:#e8f5e9,stroke:#388e3c,stroke-width:2px,color:#1b5e20;
-    classDef branchOrange fill:#fff3e0,stroke:#f57c00,stroke-width:2px,color:#e65100;
-    classDef branchRed fill:#ffebee,stroke:#d32f2f,stroke-width:2px,color:#b71c1c;
+    %% Node styling
+    classDef terminal fill:#1e293b,stroke:#475569,stroke-width:2px,color:#f8fafc;
+    classDef process fill:#0284c7,stroke:#0369a1,stroke-width:2px,color:#ffffff;
+    classDef decision fill:#d97706,stroke:#b45309,stroke-width:2px,color:#ffffff;
+    classDef correctBranch fill:#16a34a,stroke:#15803d,stroke-width:2px,color:#ffffff;
+    classDef ambiguousBranch fill:#ea580c,stroke:#c2410c,stroke-width:2px,color:#ffffff;
+    classDef incorrectBranch fill:#dc2626,stroke:#b91c1c,stroke-width:2px,color:#ffffff;
 
-    START([Start / User Query]):::startEnd --> retrieve[retrieve node<br/>Fetch top-k chunks from FAISS]:::processNode
-    retrieve --> eval[eval_each_doc node<br/>Score each chunk with LLM judge]:::processNode
-    
-    eval --> route{route_after_eval<br/>Confidence Thresholds}:::decisionNode
+    START([User Query]):::terminal --> RETRIEVE[1. Retrieve Node<br/>Fetch top-k chunks from FAISS]:::process
+    RETRIEVE --> EVAL[2. Evaluator Node<br/>Score each chunk with LLM 0.0 - 1.0]:::process
+
+    EVAL --> ROUTE{3. Route Decision<br/>Confidence Thresholds}:::decision
 
     %% Branches
-    route -- "CORRECT<br/>(At least 1 chunk > 0.7)" --> refine[refine node<br/>1. Decompose into sentences<br/>2. Filter relevant sentences<br/>3. Recompose clean context]:::branchGreen
-    route -- "AMBIGUOUS<br/>(Mixed confidence: 0.3 - 0.7)" --> ambiguous[ambiguous node<br/>Signal ambiguity / partial answer]:::branchOrange
-    route -- "INCORRECT<br/>(All chunks < 0.3)" --> fail[fail / web_search node<br/>Fallback: Web search or rejection]:::branchRed
+    ROUTE -- "CORRECT<br/>(At least 1 chunk > 0.7)" --> REFINE[4. Refine Node<br/>• Decompose to sentences<br/>• LLM filter keep/drop<br/>• Recompose clean context]:::correctBranch
+    
+    ROUTE -- "AMBIGUOUS<br/>(Mixed confidence 0.3 - 0.7)" --> AMBIGUOUS[Ambiguous Node<br/>Provide cautionary/partial response]:::ambiguousBranch
+    
+    ROUTE -- "INCORRECT<br/>(All chunks < 0.3)" --> FAIL[Fail / Web Search Node<br/>Reject answer or fallback to web]:::incorrectBranch
 
     %% Generation
-    refine --> generate[generate node<br/>Synthesize final answer using refined context]:::branchGreen
-    
-    generate --> END([End / Output Response]):::startEnd
-    ambiguous --> END
-    fail --> END
+    REFINE --> GENERATE[5. Generate Node<br/>Synthesize grounded answer]:::correctBranch
+
+    GENERATE --> END([Final Answer]):::terminal
+    AMBIGUOUS --> END
+    FAIL --> END
 ```
 
 ---
 
-## 🔍 Detailed Node & Edge Breakdown
+## 🔬 Step-by-Step Pipeline Walkthrough
 
-### 1. State Definition
-The LangGraph `State` tracks document lifecycles and evaluation scores across nodes:
+### Part 1: Naive RAG (`1_basic_rag.ipynb`)
+**The Baseline**: Standard retrieval-generation loop without validation or filtering.
+1. **Ingest & Embed**: Loads PDF documents and indexes 900-character chunks with Google Gemini embeddings (`gemini-embedding-2-preview`) in FAISS.
+2. **Retrieve**: Takes user query $\rightarrow$ retrieves top-$k$ most similar chunks.
+3. **Generate**: Passes all raw retrieved chunks directly to Groq LLM.
+> *Limitation*: Raw chunks often include irrelevant sentences, headers, or noise that can lead to hallucinations.
+
+---
+
+### Part 2: Retrieval Refinement (`2_retrieval_refinement.ipynb`)
+**Knowledge Refinement (Decomposition $\rightarrow$ Filter $\rightarrow$ Recomposition)**
+
+Instead of passing full raw chunks to the generator, this notebook cleans retrieved knowledge at the **sentence level**:
+
+```mermaid
+flowchart LR
+    classDef box fill:#f1f5f9,stroke:#64748b,stroke-width:1px,color:#0f172a;
+    classDef action fill:#0284c7,stroke:#0369a1,stroke-width:2px,color:#ffffff;
+
+    A[Retrieved Chunks]:::box --> B[1. Decompose<br/>Regex Sentence Splitter]:::action
+    B --> C[Sentence Strips]:::box
+    C --> D[2. Filter<br/>LLM Judge: KeepOrDrop]:::action
+    D --> E[Kept Sentences]:::box
+    E --> F[3. Recompose<br/>Join into Clean Context]:::action
+    F --> G[Refined Context]:::box
+```
+
+1. **Sentence Decomposition**:
+   - Uses regex sentence boundaries `(?<=[.!?])\s+` to segment raw paragraphs into distinct sentences (`strips`).
+   - Filters out short fragments (< 20 characters).
+2. **Relevance Filtering (LLM Judge)**:
+   - Evaluates each sentence against the user query using structured output:
+     ```python
+     class KeepOrDrop(BaseModel):
+         keep: bool
+     ```
+   - Only sentences directly contributing to answering the question are kept (`kept_strips`).
+3. **Context Recomposition**:
+   - Glues retained sentences together into `refined_context`, eliminating up to 70% of retrieved noise.
+4. **Grounded Generation**:
+   - LLM answers strictly from the `refined_context`.
+
+---
+
+### Part 3: Corrective Evaluator (`3_retrieval_evaluator.ipynb`)
+**The Full CRAG Pattern**: Adds confidence scoring and dynamic corrective routing.
+
+```
+                    ┌─────────────────┐
+                    │ Evaluator Score │
+                    │   (0.0 - 1.0)   │
+                    └────────┬────────┘
+                             │
+            ┌────────────────┼────────────────┐
+            ▼                ▼                ▼
+     Score > 0.7       0.3 <= Score <= 0.7    Score < 0.3
+      [CORRECT]          [AMBIGUOUS]         [INCORRECT]
+            │                │                │
+            ▼                ▼                ▼
+    Sentence Refine    Partial Warning    Fallback / Fail
+```
+
+1. **Chunk Evaluation (`eval_each_doc_node`)**:
+   - Each chunk receives a confidence score ($0.0 - 1.0$) and rationale using structured schema `DocEvalScore`:
+     ```python
+     class DocEvalScore(BaseModel):
+         score: float
+         reason: str
+     ```
+2. **Verdict Classification**:
+   - **`CORRECT`**: At least one chunk scores $> 0.7$ (`UPPER_TH`). Chunks with score $> 0.3$ are passed to `good_docs`.
+   - **`INCORRECT`**: All chunks score $< 0.3$ (`LOWER_TH`).
+   - **`AMBIGUOUS`**: Intermediate scores with mixed signals.
+3. **Dynamic Routing (`route_after_eval`)**:
+   - Directs execution to `refine`, `ambiguous`, or `fail` (or external web search).
+
+---
+
+## 📊 State Management
+
+The entire execution state is tracked across LangGraph nodes using a typed dictionary:
+
 ```python
 class State(TypedDict):
-    question: str
-    docs: List[Document]
-    good_docs: List[Document]
-    verdict: str                  # "CORRECT", "INCORRECT", or "AMBIGUOUS"
-    reason: str                   # Evaluator rationale
-    strips: List[str]             # Decomposed sentences
-    kept_strips: List[str]        # Filtered relevant sentences
-    refined_context: str          # Noise-free recomposed context
-    answer: str                   # Final synthesized output
+    question: str                # User query
+    docs: List[Document]         # Raw retrieved chunks from FAISS
+    good_docs: List[Document]    # Chunks passing lower threshold (> 0.3)
+    verdict: str                 # "CORRECT", "INCORRECT", or "AMBIGUOUS"
+    reason: str                  # Evaluator explanation
+    strips: List[str]            # Decomposed sentences
+    kept_strips: List[str]       # Filtered relevant sentences
+    refined_context: str         # Noise-free recomposed context
+    answer: str                  # Final synthesized response
 ```
-
-### 2. Node Explanations
-
-1. **`retrieve`**:
-   - Queries the FAISS vector database using `gemini-embedding-2-preview` embeddings and returns the top-$k$ most relevant document chunks.
-
-2. **`eval_each_doc` (Retrieval Evaluator)**:
-   - Uses Groq LLM with structured output (`DocEvalScore: { score: float, reason: str }`) to grade each retrieved chunk between `0.0` and `1.0`.
-   - **Evaluation Thresholds**:
-     - $\text{Score} > 0.7$ (`UPPER_TH`): High relevance.
-     - $\text{Score} < 0.3$ (`LOWER_TH`): Irrelevant.
-   - **Verdict Logic**:
-     - **`CORRECT`**: At least one chunk has $\text{score} > 0.7$. High-confidence chunks are added to `good_docs`.
-     - **`INCORRECT`**: All chunks have $\text{score} < 0.3$.
-     - **`AMBIGUOUS`**: No chunk exceeds $0.7$, but not all are below $0.3$.
-
-3. **`route_after_eval` (Conditional Edge)**:
-   - Dynamically routes execution based on `state["verdict"]`:
-     - `CORRECT` $\rightarrow$ `refine`
-     - `AMBIGUOUS` $\rightarrow$ `ambiguous`
-     - `INCORRECT` $\rightarrow$ `fail` (or external web search).
-
-4. **`refine` (Knowledge Refinement)**:
-   - **Sentence-level Decomposition**: Splits paragraphs into individual sentences (`strips`).
-   - **LLM Judge Filtering**: Evaluates each sentence against the query (`KeepOrDrop: { keep: bool }`), discarding irrelevant sentences/noise.
-   - **Recomposition**: Merges retained sentences into `refined_context`.
-
-5. **`generate`**:
-   - Produces the final grounded response using strictly the clean `refined_context`.
 
 ---
 
-## 🚀 Getting Started
+## 🚀 Quick Start Guide
 
-### 1. Prerequisites & Environment Setup
-
-Clone the repository:
+### 1. Clone & Install
 ```bash
 git clone https://github.com/vijayypandit/corrective-rag-tutorial.git
 cd corrective-rag-tutorial
-```
 
-Create a virtual environment and install dependencies:
-```bash
+# Create and activate virtual environment
 python -m venv .venv
-# On Windows
-.venv\Scripts\activate
-# On macOS/Linux
-source .venv/bin/activate
+.venv\Scripts\activate   # Windows
+# source .venv/bin/activate # macOS/Linux
 
 pip install -r requirements.txt
 ```
 
 ### 2. Configure Environment Variables
-
 Create a `.env` file in the root directory:
 ```env
 GROQ_API_KEY=your_groq_api_key_here
 GOOGLE_API_KEY=your_google_gemini_api_key_here
 ```
 
-### 3. Run the Notebooks
-
-Launch Jupyter Notebook:
+### 3. Run Notebooks
 ```bash
 jupyter notebook
 ```
-Open and run the notebooks in sequence:
+Follow the progression in order:
 1. `1_basic_rag.ipynb`
 2. `2_retrieval_refinement.ipynb`
 3. `3_retrieval_evaluator.ipynb`
@@ -142,8 +186,11 @@ Open and run the notebooks in sequence:
 
 ## 🛠️ Tech Stack
 
-- **Orchestration**: [LangGraph](https://github.com/langchain-ai/langgraph) & [LangChain](https://github.com/langchain-ai/langchain)
-- **Vector Database**: [FAISS](https://github.com/facebookresearch/faiss)
-- **Embeddings**: Google Generative AI (`gemini-embedding-2-preview`)
-- **LLM Inference**: [Groq](https://groq.com/)
-- **Document Loading**: PyPDF / PyMuPDF
+| Component | Technology |
+| :--- | :--- |
+| **Workflow Engine** | [LangGraph](https://github.com/langchain-ai/langgraph) |
+| **Framework** | [LangChain](https://github.com/langchain-ai/langchain) |
+| **Vector Store** | [FAISS](https://github.com/facebookresearch/faiss) |
+| **Embeddings** | Google Generative AI (`gemini-embedding-2-preview`) |
+| **LLM Inference** | [Groq](https://groq.com/) (`openai/gpt-oss-120b` / `llama-3.3-70b-versatile`) |
+| **Document Loaders** | `PyPDFLoader` / `PyMuPDFLoader` |
